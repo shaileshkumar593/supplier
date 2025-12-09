@@ -1,0 +1,95 @@
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: false
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: "swallow-supplier-prod-sa"
+
+ingress:
+  enabled: true
+  className: "gce"
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: swallow-supplier-prod-public
+    networking.gke.io/managed-certificates: swallow-supplier
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: supplier.swallow.goglobal.travel
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+managedCertificate:
+  domain: supplier.swallow.goglobal.travel
+
+backendconfig:
+    timeout: 300
+    healthCheck:
+      type: HTTP
+      port: 7001
+      requestPath: /api/v1/heartbeat
+    connectionDraining:
+      timeout: 300
+
+env_vars: 
+  GO_ENV: test
+  APP_ENV: PRODUCTION
+  APP_PORT: 7001 
+  AUTH_SCOPE_DEF_PATH: /swallow-supplier/config/auth.yml
+
+  # All key will be fetch from Secret Manager  
+  # Postgres 
+  
+  # Database Pool setup 
+  DB_MAX_LIFE_TIME_IN_MINUTES: 30
+  DB_MAX_IDLE_TIME_IN_SECONDS: 120
+  DB_DEFAULT_MAX_OPEN_CONNECTIONS: 10000
+  DB_DEFAULT_MAX_IDLE_CONNECTIONS: 30
+  DB_MAX_POOL_SIZE: 15000
+  DB_MAX_CONN_IDLE_TIME: 60
+
+  # Mongo 
+  MONGO_DB_NAME: swallow-prod
+  
+  #GCP 
+  GOOGLE_PLACE_ID_BASEURL: "https://maps.googleapis.com/maps/api/geocode/json"
+  GCP_PROJECT_ID: swallow-424613
+
+  # CIRCUIT BREAKER
+  CIRCUIT_BREAKER_ENABLE: 1
+  CIRCUIT_BREAKER_REQUESTS: 10
+  CIRCUIT_BREAKER_FAILURE_RATIO: 60
+  TIMEOUT_REGISTER: 30s
+  RETRY_REGISTER: 5
+ 
+  # Mocking Api for testing 
+  MOCK_HTTP: 0
+
+  # Redis 
+  REDIS_URL: 192.168.0.11:6379
+  CACHE_NAME: redis
+
+  # Yanolja 
+  YANOLJA_DOMAIN: https://leisure-open-api.yanolja.com
+  YANOLJA_MOCK_HTTP: 0
+  BABEL_DOMAIN: https://fragma-api.yanolja.com
+ 
+  # Trip
+  TRIP: http://swallow-channel.swallow-channel.svc.cluster.local:8080
+  TRIP_USER_AGENT: "X-Client:Trip"
+  TRIP_SYNC_URL: https://content-api.swallow.goglobal.travel/schedule
+
+  # PDF Voucher 
+  PDF_VOUCHER : http://swallow-content-pipeline.swallow-content-pipeline.svc.cluster.local:1679
+
+  # Channel Name 
+  CHANNEL_CODE: GGT
+
+  # Excel
+  YGT_FILE_PATH: /swallow-supplier/excel/YA-GGT-TRIP_Category_Mapping.xlsx

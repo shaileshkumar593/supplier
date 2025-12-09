@@ -1,0 +1,16 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: {{ include "swallow-supplier.fullname" . }}
+  labels:
+    {{- include "swallow-supplier.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.backendconfig.healthCheck }}
+  healthCheck:
+    type: {{ .Values.backendconfig.healthCheck.type }}
+    port: {{ .Values.backendconfig.healthCheck.port }}
+    requestPath: {{ .Values.backendconfig.healthCheck.requestPath }}
+  {{- end }}
+  timeoutSec: {{ .Values.backendconfig.timeout }}
+  connectionDraining:
+    drainingTimeoutSec: {{ .Values.backendconfig.connectionDraining.timeout }}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "swallow-supplier.fullname" . }}-test-connection"
+  labels:
+    {{- include "swallow-supplier.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['{{ include "swallow-supplier.fullname" . }}:{{ .Values.service.port }}']
+  restartPolicy: Never

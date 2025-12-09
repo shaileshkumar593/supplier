@@ -1,0 +1,154 @@
+scope_definition:
+  99: "Super User"
+  0: "Client"
+
+route_definition:
+
+  ######################################
+  # Public Endpoints
+  ######################################
+
+  /api/v1/heartbeat:
+    def: "Heartbeat endpoint"
+    protected_methods:
+     
+
+  ######################################
+  # Protected Endpoints
+  ######################################
+
+  /api/v1/consumers:
+    def: "Consumer Onboarding"
+    protected_methods:
+      POST:
+        - 99
+      GET:
+        - 99
+
+  /v1/everland/orders/{orderId}/full-cancel:
+    def: "everland_full_order_cancellation"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+
+
+  /v1/product/create/callback:
+    def: "product_create_callback"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/processing/restoring/callback:
+    def: "order_usage_restoring_callback"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/individual/voucher/update/callback:
+    def: "individual_voucher_update"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/combined/voucher/update/callback:
+    def: "combined_voucher_update"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/reconciliation/callback:
+    def: "reconciliation_callback"
+    protected_methods:
+      GET:
+        - 99
+  
+
+  /v1/order/cancellation/ack/callback:
+    def: "cancellation_ack_callback"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/force/order/cancellation/callback:
+    def: "force_order_cancellation_callback"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/refusalto/cancel/callback:
+    def: "refusal_to_cancel_callback"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  
+
+  /v1/odoo/order/syncflag:
+    def: "update_order_odoo_sync_flag"
+    protected_methods:
+      POST:
+        - 99
+        - 0
+
+  /v1/order/status/lookup/callback/{partnerOrderId}:
+    def: "order_status_lookup_callback"
+    protected_methods:
+      GET:
+        - 99
+
+
+  /v1/odoo/order/sync:
+    def: "odoo_order_sync"
+    protected_methods:
+      GET:
+        - 99
+
+  /v1/odoo/order/{orderId}/sync:
+    def: "odoo_order_sync_by_orderid"
+    protected_methods:
+      GET:
+        - 99
+
+  /v1/odoo/product/sync:
+    def: "odoo_product_sync"
+    protected_methods:
+      GET:
+        - 99 
+
+  /v1/get/plu/{productId}/productId/{variantId}/variantId/{productVersion}/productVersion:
+    def: "get_plu_from_redis"
+    protected_methods:
+      GET:
+        - 99
+
+  /v1/orders/customeremail/{customeremail}/channelcode/{channelcode}:
+    def: "list_order_by_email_and_channelcode"
+    protected_methods:
+      GET:
+        - 99
+
+  /v1/odoo/order/sync/flag/update:
+    def: "update_order_odoo_sync_flag_false"
+    protected_methods:
+      POST:
+        - 99
+        - 0 
+
+  /v1/travolution/webhook:
+    def: "callback update"  
+    protected_methods:
+       POST:
+        - 99
+        - 0 
+
+  
+  

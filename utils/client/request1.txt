@@ -1,0 +1,354 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/json"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"mime/multipart"
+	"net"
+	"net/http"
+	"net/textproto"
+	"net/url"
+	"os"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-kit/kit/log"
+	"github.com/google/go-querystring/query"
+	"github.com/sony/gobreaker"
+)
+
+const (
+	TimestampFormat       = "20060102150405"
+	MaxConcurrentRequests = 1000
+	RequestsPerDay        = 1000000
+	RequestsPerSecond     = RequestsPerDay / (24 * 60 * 60) // Calculate requests per second
+)
+
+// HTTPClient interface
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// Request generic callback interface
+type Request struct {
+	Ctx           context.Context
+	Client        HTTPClient
+	Cert          Certificate
+	Auth          Auth
+	Headers       map[string]string
+	Logger        log.Logger
+	RequestID     string
+	Method        string
+	URL           string
+	ContentType   string
+	Data          []byte
+	CustomRequest CustomRequest
+}
+
+// Auth authentication object
+type Auth struct {
+	User string
+	Pass string
+}
+
+// CustomRequest some custom request to handle
+type CustomRequest struct {
+	RequestTimeout string
+	Retries        int
+}
+
+var defaultTransport = &http.Transport{
+	TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		},
+		PreferServerCipherSuites: true,
+		MinVersion:               tls.VersionTLS12,
+		MaxVersion:               tls.VersionTLS13,
+	},
+	MaxIdleConns:        10000,
+	MaxIdleConnsPerHost: 2000,
+	MaxConnsPerHost:     2000,
+	IdleConnTimeout:     90 * time.Second,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2: true,
+}
+
+// NewRequest creates a reusable high-throughput request client
+func NewRequest(cr CustomRequest) *Request {
+	timeout := 60 * time.Second
+	if cr.RequestTimeout != "" {
+		if parsed, err := time.ParseDuration(cr.RequestTimeout); err == nil {
+			timeout = parsed
+		}
+	}
+
+	logger := log.NewJSONLogger(os.Stdout)
+	logger = log.With(logger,
+		"ts", log.DefaultTimestampUTC,
+		"caller", log.DefaultCaller,
+	)
+
+	return &Request{
+		Client: &http.Client{
+			Timeout:   timeout,
+			Transport: defaultTransport,
+		},
+		CustomRequest: cr,
+		Logger:        logger,
+		Headers:       make(map[string]string),
+	}
+}
+
+// SendRequest handles the actual HTTP request call
+func (r *Request) SendRequest() (resp interface{}, err error) {
+	logger := log.With(r.Logger, "method", "request.SendRequest")
+	logger = log.With(r.Logger,
+		"method", "request.SendRequest",
+	)
+
+	var response *http.Response
+	buf := bytes.NewBuffer(r.Data)
+	request, err := http.NewRequestWithContext(r.Ctx, r.Method, r.URL, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	for key, val := range r.Headers {
+		request.Header.Add(key, val)
+	}
+
+	if user, pass := r.GetBasicAuth(); user != "" && pass != "" {
+		request.SetBasicAuth(user, pass)
+	}
+
+	if r.Method != http.MethodGet {
+		request.Header.Set("Content-Type", r.ContentType)
+		request.Header.Set("Content-Length", strconv.Itoa(len(r.Data)))
+	}
+
+	var retries = r.CustomRequest.Retries
+	for retries > 0 {
+		logger.Log("Sending Request Attempt", retries)
+		if response, err = r.Client.Do(request); err != nil {
+			logger.Log("Sending HTTP Request Error", err.Error())
+			retries--
+			time.Sleep(time.Second) // Simple backoff strategy
+			continue
+		}
+		break
+	}
+
+	if response != nil {
+		resp = NewResponse(response)
+	}
+
+	return resp, err
+}
+
+// Worker function to handle requests
+func worker(ctx context.Context, requests <-chan *Request, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for req := range requests {
+		_, err := req.SendRequest()
+		if err != nil {
+			req.Logger.Log("Error sending request", err)
+		}
+	}
+}
+
+// StartWorkers initializes a pool of workers
+func StartWorkers(ctx context.Context, numWorkers int, requests <-chan *Request) {
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go worker(ctx, requests, &wg)
+	}
+	wg.Wait()
+}
+
+// NewResponse creates a new response from an HTTP response
+func NewResponse(resp *http.Response) *Response {
+	body, _ := ioutil.ReadAll(resp.Body)
+	resp.Body.Close() // Close the response body
+	return &Response{
+		StatusCode: resp.StatusCode,
+		Body:       body,
+		Headers:    resp.Header,
+	}
+}
+
+// Response struct to hold the HTTP response
+type Response struct {
+	StatusCode int
+	Body       []byte
+	Headers    http.Header
+}
+
+// Certificate struct to hold certificate information
+type Certificate struct {
+	CertFile string
+	KeyFile  string
+}
+
+// SetBasicAuth sets the basic authentication
+func (r *Request) SetBasicAuth(user string, pass string) {
+	r.Auth.User = user
+	r.Auth.Pass = pass
+}
+
+// GetBasicAuth gets basic authentication
+func (r *Request) GetBasicAuth() (user string, pass string) {
+	return r.Auth.User, r.Auth.Pass
+}
+
+// EncodeBasedOnContentType encodes the payload based on specified content type
+func (r *Request) EncodeBasedOnContentType(data interface{}, contentType string) (string, string) {
+	ct := strings.ToLower(contentType)
+
+	switch ct {
+	case "application/x-www-form-urlencoded":
+		switch v := data.(type) {
+		case map[string]interface{}:
+			values := url.Values{}
+			for k, val := range v {
+				if valStr, ok := val.(string); ok && valStr != "" {
+					values.Set(k, valStr)
+				}
+			}
+			return values.Encode(), "application/x-www-form-urlencoded"
+		default:
+			newData, _ := query.Values(v)
+			return newData.Encode(), "application/x-www-form-urlencoded"
+		}
+
+	case "application/json":
+		if data == nil {
+			return "{}", "application/json"
+		}
+		newData, _ := json.Marshal(data)
+		return string(newData), "application/json"
+
+	case "text/xml":
+		var b bytes.Buffer
+		xml.NewEncoder(&b).Encode(data)
+		return b.String(), "text/xml"
+	}
+
+	return "", contentType
+}
+
+// PrepareFormData formats the required request form-data
+func PrepareFormData(createFormDataHeader bool, stringInput interface{}, fileInput interface{}) (b bytes.Buffer, contentType string, err error) {
+	stringMap, _ := stringInput.(map[string]string)
+	fileMap, _ := fileInput.(map[string]*os.File)
+
+	w := multipart.NewWriter(&b)
+	defer w.Close()
+
+	for index, file := range fileMap {
+		var fw io.Writer
+		fileInfo, _ := file.Stat()
+
+		if createFormDataHeader {
+			buffer := make([]byte, 512)
+			if _, err := file.Read(buffer); err != nil {
+				return b, "", err
+			}
+			if _, err := file.Seek(0, 0); err != nil {
+				return b, "", err
+			}
+			var filename = fileInfo.Name()
+
+			h := make(textproto.MIMEHeader)
+			h.Set("Content-Disposition",
+				fmt.Sprintf(`form-data; name="%s"; filename="%s"`,
+					escapeQuotes(index), escapeQuotes(filename)))
+			h.Set("Content-Type", http.DetectContentType(buffer))
+			fw, err = w.CreatePart(h)
+		} else {
+			fw, err = w.CreateFormFile(index, fileInfo.Name())
+		}
+
+		_, err = io.Copy(fw, file)
+		file.Close()
+	}
+
+	for key, str := range stringMap {
+		var fw io.Writer
+
+		fw, err = w.CreateFormField(key)
+		_, err = io.Copy(fw, strings.NewReader(str))
+	}
+
+	contentType = w.FormDataContentType()
+
+	return
+}
+
+// escapeQuotes escapes quotes in a string
+func escapeQuotes(s string) string {
+	return strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(s)
+}
+
+// FormatCircuitBreakerSettings formats settings required for circuit breaker
+func (r *Request) FormatCircuitBreakerSettings(name string) *gobreaker.CircuitBreaker {
+	logger := log.With(r.Logger, "method", "request.FormatCircuitBreakerSettings")
+	logger = log.With(r.Logger,
+		"method", "request.FormatCircuitBreakerSettings",
+	)
+
+	var (
+		settings gobreaker.Settings
+		defaultRequests             = 10
+		defaultFailureRatio float64 = 60
+	)
+
+	settings.Name = name
+	settings.Interval = 5 * time.Second
+	settings.Timeout = 3 * time.Second
+	settings.ReadyToTrip = func(counts gobreaker.Counts) bool {
+		failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+		return counts.Requests >= uint32(defaultRequests) && failureRatio >= (defaultFailureRatio / 100)
+	}
+
+	settings.OnStateChange = func(name string, from gobreaker.State, to gobreaker.State) {
+		logger.Log("State changed from", from.String(), "to", to.String())
+	}
+
+	return gobreaker.NewCircuitBreaker(settings)
+}
+
+// copyBody reads the body of an io.ReadCloser and returns it as a byte slice
+func copyBody(src io.ReadCloser) ([]byte, error) {
+	b, err := ioutil.ReadAll(src)
+	if err != nil {
+		return nil, err
+	}
+	src.Close()
+	return b, nil
+}
+
+// resetBody resets the request body to allow for re-reading
+func resetBody(request *http.Request, originalBody []byte) {
+	request.Body = io.NopCloser(bytes.NewBuffer(originalBody))
+	request.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBuffer(originalBody)), nil
+	}
+}

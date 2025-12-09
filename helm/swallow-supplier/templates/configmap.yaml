@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "swallow-supplier.fullname" . }}
+data:
+{{- range $k, $v := .Values.env_vars }}
+  {{ $k }}: {{ $v | quote }}
+{{- end }}
