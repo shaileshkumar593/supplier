@@ -1,0 +1,91 @@
+pipeline {
+    agent any
+
+     options {
+        skipDefaultCheckout(true)
+    }
+
+    stages {
+        stage('Checkout Repository') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Set Environment and Tag') {
+            steps {
+                script {
+                    def BRANCH_NAME = params.branch
+                    def SHORT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def IMAGE_TAG = SHORT_COMMIT
+                    def CRED_ID = env.CRED_ID
+                    def PROJECT_ID = env.PROJECT_ID
+                    def CLUSTER_NAME = env.CLUSTER_NAME
+                    def LOCATION = env.LOCATION
+                    def HELM_RELEASE = env.HELM_RELEASE
+                    def HELM_CHART = env.HELM_CHART.trim()
+                    def ENVIRONMENT = 'DEV'
+
+                    // Set ENVIRONMENT based on branch
+                    if (BRANCH_NAME == 'main' && CLUSTER_NAME == 'swallow-prod') {
+                        env.ENVIRONMENT = 'PROD'
+                    } else {
+                        env.ENVIRONMENT = 'DEV'
+                    }
+
+                    echo "Branch: ${BRANCH_NAME}, ENVIRONMENT: ${env.ENVIRONMENT}, Image Tag: ${IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Build and Push') {
+            steps {
+                script {
+                    def DOCKER_TAG = build (
+                        propagate: true,
+                        wait: true,
+                        job: 'kube-common-swallow-supplier-build',
+                        parameters: [string(name: 'branch', value: params.branch)]
+                    ).getBuildVariables().DOCKER_TAG
+                    currentBuild.displayName=DOCKER_TAG
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                script {
+                    def SHORT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def ENV_LOWER = env.ENVIRONMENT.toLowerCase()
+
+                    withEnv([
+                        "ENV_LOWER=${ENV_LOWER}",
+                        "CLUSTER_NAME=${CLUSTER_NAME}",
+                        "LOCATION=${LOCATION}",
+                        "PROJECT_ID=${PROJECT_ID}",
+                        "HELM_RELEASE=${HELM_RELEASE}",
+                        "HELM_CHART=${HELM_CHART}",
+                        "SHORT_COMMIT=${SHORT_COMMIT}"
+                    ]) {
+                        withCredentials([file(credentialsId: CRED_ID, variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                            sh '''
+                                gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+                                gcloud container clusters get-credentials "$CLUSTER_NAME" --location "$LOCATION" --project "$PROJECT_ID"
+
+                                helm upgrade --install "$HELM_RELEASE" "$HELM_CHART" --namespace "$HELM_RELEASE" \
+                                    --values ./helm/$HELM_RELEASE/helm_vars/$ENV_LOWER/values.yaml \
+                                    --set commitShort="$SHORT_COMMIT" --set force_restart=$(date +%s)
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}

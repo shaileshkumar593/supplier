@@ -1,0 +1,81 @@
+pipeline {
+    agent any
+
+     options {
+        skipDefaultCheckout(true)
+    }
+
+    stages {
+        stage('Checkout Repository') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Set Environment and Tag') {
+            steps {
+                script {
+                    def BRANCH_NAME = params.branch
+                    def CRED_ID = env.CRED_ID
+                    def PROJECT_ID = env.PROJECT_ID
+                    def REPO = env.REPO
+                    def IMAGE_NAME = env.IMAGE_NAME.trim()
+                }
+            }
+        }
+
+        stage('Build and Push') {
+            steps {
+                script {
+                    def HASH_TAG = sh(returnStdout: true, script: "git rev-parse --verify HEAD").trim()
+                    def SHORT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+
+                    withCredentials([file(credentialsId: CRED_ID, variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
+                        sh '''
+                        gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+                        gcloud auth configure-docker europe-west1-docker.pkg.dev
+                        '''
+    
+                        docker.withRegistry('https://europe-west1-docker.pkg.dev', '') {
+                            def image = docker.build("${PROJECT_ID}/${REPO}/${IMAGE_NAME}")
+                            image.push(SHORT_COMMIT)
+                            image.push(HASH_TAG)
+                        }
+                    }
+                    env.DOCKER_TAG=SHORT_COMMIT
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+
+            script {
+                echo "Cleaning up Docker images older than 7 days..."
+
+                // Remove dangling images first
+                sh "docker image prune -f"
+
+                // Remove images older than 7 days
+                sh '''#!/bin/bash
+                    set -e
+
+                    THRESHOLD=$(date -d "7 days ago" +%s)
+
+                    docker images --format "{{.Repository}}:{{.Tag}} {{.CreatedAt}}" | while read image createdAt1 createdAt2 createdAt3 createdAt4; do
+                        IMAGE="$image"
+                        CREATED="$createdAt1 $createdAt2 $createdAt3 $createdAt4"
+                        CREATED_TS=$(date -d "$CREATED" +%s 2>/dev/null || echo "")
+
+                        if [[ -n "$CREATED_TS" && "$CREATED_TS" -lt "$THRESHOLD" ]]; then
+                            echo "Removing $IMAGE (created $CREATED)"
+                            docker rmi -f "$IMAGE" || true
+                        fi
+                    done
+                    '''
+            }
+        }
+    }
+}

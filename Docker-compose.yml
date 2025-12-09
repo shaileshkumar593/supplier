@@ -1,0 +1,48 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: swallow_supplier
+    env_file:
+      - .env  # ✅ Load .env file
+    volumes:
+      - ./.env:/swallow-supplier/.env  # ✅ Mount .env file inside container
+      - ./config/auth.yml:/swallow-supplier/config/auth.yml
+      - ./excel/YA-GGT-TRIP_Category_Mapping.xlsx:/swallow-supplier/excel/YA-GGT-TRIP_Category_Mapping.xlsx
+    ports:
+      - "7001:7001"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  db_mongo:
+    image: mongo:8.0
+    container_name: db_mongo
+    env_file:
+      - .env
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7
+    container_name: redis
+    command: ["redis-server", "--requirepass", ""]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongo_data:
+  redis_data:

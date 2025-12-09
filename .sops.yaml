@@ -1,0 +1,3 @@
+---
+creation_rules:
+  - gcp_kms: projects/swallow-424613/locations/global/keyRings/swallow-secrets/cryptoKeys/swallow-helm
